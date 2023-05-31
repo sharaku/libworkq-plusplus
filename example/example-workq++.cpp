@@ -29,19 +29,22 @@
 int
 main(void)
 {
-	libsharaku::workque::simple_workque scheduler;
+	sharaku::workque::workque scheduler;
 	scheduler.push(
+		0,
 		[](){
 			printf("test\n");
 		}
 	);
 	scheduler.push(
+		0,
 		[&scheduler](){
 			printf("test2\n");
 		}
 	);
 	scheduler.push_for(
 		std::chrono::milliseconds(1000),
+		0,
 		[&scheduler](){
 			printf("timer event\n");
 			scheduler.quit();
