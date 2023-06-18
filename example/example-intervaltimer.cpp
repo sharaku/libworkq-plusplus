@@ -25,31 +25,21 @@
  */
 #include <stdio.h>
 #include "../include/workq++.hpp"
+#include "../include/co-routine.hpp"
+#include "../include/wq-intervatimer.hpp"
 
 int
 main(void)
 {
   sharaku::workque::workque scheduler;
-  scheduler.push(
-    0,
-    [](){
-      printf("test\n");
-    }
-  );
-  scheduler.push(
-    0,
-    [&scheduler](){
-      printf("test2\n");
-    }
-  );
-  scheduler.push_for(
-    std::chrono::milliseconds(1000),
-    0,
-    [&scheduler](){
-      printf("timer event\n");
-      scheduler.quit();
-    }
-  );
+
+  sharaku::workque::intervaltimer it(&scheduler, 0);
+  it.with_interval(std::chrono::milliseconds(1000))
+    .push([](){
+      printf("timer\n");
+    })
+    .start();
+
   scheduler.run();
   return 0;
 }

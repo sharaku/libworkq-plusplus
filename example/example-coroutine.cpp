@@ -25,31 +25,29 @@
  */
 #include <stdio.h>
 #include "../include/workq++.hpp"
+#include "../include/co-routine.hpp"
 
 int
 main(void)
 {
   sharaku::workque::workque scheduler;
-  scheduler.push(
-    0,
-    [](){
-      printf("test\n");
-    }
-  );
-  scheduler.push(
-    0,
-    [&scheduler](){
-      printf("test2\n");
-    }
-  );
-  scheduler.push_for(
-    std::chrono::milliseconds(1000),
-    0,
-    [&scheduler](){
-      printf("timer event\n");
-      scheduler.quit();
-    }
-  );
+
+  sharaku::workque::coroutine co(&scheduler, 0);
+  co
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co2::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("function2\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("function3\n");
+      return sharaku::workque::coroutine::result::end;
+    })
+   .start();
+
   scheduler.run();
   return 0;
 }
