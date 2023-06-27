@@ -32,18 +32,30 @@ main(void)
 {
   sharaku::workque::workque scheduler;
 
+  sharaku::workque::coroutine co_in1(&scheduler, 0);
+  co_in1
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co_in1::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("co_in1::function2\n");
+      return sharaku::workque::coroutine::result::next;
+    });
+
   sharaku::workque::coroutine co(&scheduler, 0);
   co
    .push([]() -> sharaku::workque::coroutine::result {
-      printf("co2::function1\n");
+      printf("co::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push(&co_in1)
+   .push([](){
+      printf("co::function2\n");
       return sharaku::workque::coroutine::result::next;
     })
    .push([](){
-      printf("function2\n");
-      return sharaku::workque::coroutine::result::next;
-    })
-   .push([](){
-      printf("function3\n");
+      printf("co::function3\n");
       return sharaku::workque::coroutine::result::end;
     })
    .start();

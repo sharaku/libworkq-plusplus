@@ -32,7 +32,6 @@
 
 namespace sharaku {
 namespace workque {
-
   class coroutine {
    public:
     // 連続してスケジューラを実行する
@@ -72,6 +71,9 @@ namespace workque {
     };
     std::vector<coroutine_paramss> routine_;
 
+    // subに対するmaster.
+    // thisが完了、masterの次を実行する.
+    coroutine *master = nullptr;
    public:
 
     coroutine(workque *wq, nice_t nice = 0) {
@@ -118,11 +120,42 @@ namespace workque {
           result ret = func();
           if (ret == result::end) {
             idle_();
+            end_();
           } else if (ret == result::submit) {
             submit_();
           } else {
             next_(static_cast<int>(ret));
           }
+        }
+      );
+      return *this;
+    }
+
+    /**
+     * 処理ルーチンを登録する
+     */
+    coroutine& push(coroutine *sub) {
+      // sub側にthisを登録する
+      sub->master = this;
+      routine_.emplace_back(wq_, nice_, std::chrono::milliseconds(0),
+        [this, sub]() {
+          sub->start();
+          return result::submit;
+        }
+      );
+      return *this;
+    }
+
+    /**
+     * 指定秒数後に実行を行う処理ルーチンを登録する
+     */
+    coroutine& push_for(std::chrono::milliseconds ms, coroutine *sub) {
+      // sub側にthisを登録する
+      sub->master = this;
+      routine_.emplace_back(wq_, nice_, ms,
+        [this, sub]() {
+          sub->start();
+          return result::submit;
         }
       );
       return *this;
@@ -176,13 +209,13 @@ namespace workque {
 
     void submit_() {
       st = status::suspend;
-      next_(1);
     }
 
     void next_(int add_pc) {
         if (routine_.size() > (pc_ + add_pc)) {
           pc_ += add_pc;
         } else {
+          end_();
           st = status::idle;
           pc_ = 0;
         }
@@ -198,6 +231,11 @@ namespace workque {
       }
     }
 
+    void end_() {
+      if (master) {
+        master->next_(1);
+      }
+    }
   };
 
 
