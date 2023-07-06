@@ -43,6 +43,9 @@ main(void)
       return sharaku::workque::coroutine::result::next;
     });
 
+  // ------------------------------------
+  // 並列制御
+  // ------------------------------------
   sharaku::workque::coroutine co_in2(&scheduler, 0);
   co_in2
    .push([]() -> sharaku::workque::coroutine::result {
@@ -65,7 +68,6 @@ main(void)
       return sharaku::workque::coroutine::result::next;
     });
 
-
   sharaku::workque::coroutine_parallel co_multi(&scheduler, 0);
   co_multi
    .push([]() -> sharaku::workque::coroutine::result {
@@ -79,6 +81,36 @@ main(void)
    .push(&co_in2)
    .push(&co_in3);
 
+
+  // ------------------------------------
+  // 分岐制御を作成
+  // ------------------------------------
+  sharaku::workque::coroutine_switch<int> co_switch(&scheduler, 0);
+  co_switch
+   .switch_function([]() -> int {
+      printf("co_switch::switch_function\n");
+      return 2;
+    })
+   .then(0, [](){
+      printf("co_switch::switch_function::case 0\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .then(1, [](){
+      printf("co_switch::switch_function::case 1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .then(2, [](){
+      printf("co_switch::switch_function::case 2\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .then(3, [](){
+      printf("co_switch::switch_function::case 3\n");
+      return sharaku::workque::coroutine::result::next;
+    });
+
+  // ------------------------------------
+  // 大本の制御
+  // ------------------------------------
   sharaku::workque::coroutine co(&scheduler, 0);
   co
    .push([]() -> sharaku::workque::coroutine::result {
@@ -87,6 +119,7 @@ main(void)
     })
    .push(&co_in1)
    .push(&co_multi)
+   .push(&co_switch)
    .push([](){
       printf("co::function2\n");
       return sharaku::workque::coroutine::result::next;

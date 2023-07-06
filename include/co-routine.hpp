@@ -38,10 +38,10 @@ namespace workque {
     // 連続してスケジューラを実行する
     // 登録関数の戻り値によって制御できる.
     enum class result : int {
-      end = -2,     // IDLE状態にする
-      submit = -1,  // PCをカウントアップしてsuspend状態にする
-      retry = 0,    // 同じ処理を再実行する
-      next = 1,     // 次の処理を実行する
+      end = -2,           // IDLE状態にする
+      submit = -1,        // PCをカウントアップしてsuspend状態にする
+      retry = 0,          // 同じ処理を再実行する
+      next = 1,           // 次の処理を実行する
     };
 
     enum class status : int {
@@ -67,17 +67,20 @@ namespace workque {
     /// ルーチンの1パラメータ
     struct coroutine_paramss {
       /// 使用するworkq
-      workque *wq;
+      workque *wq = nullptr;
       /// 優先度
-      nice_t nice;
+      nice_t nice = 0;
       /// ディレイ秒数
-      std::chrono::milliseconds ms;
+      std::chrono::milliseconds ms = std::chrono::milliseconds(0);
       /// スケジュールする関数
-      std::function<void(void)> func;
+      std::function<void(void)> func = nullptr;
       /// スケジュール中のイベントスケジューラ
-      std::shared_ptr<event> ev;
+      std::shared_ptr<event> ev = nullptr;
 
       /// コンストラクタ
+      coroutine_paramss() {
+      };
+
       coroutine_paramss(workque *wq_, nice_t nice_, std::chrono::milliseconds ms_, std::function<void(void)> func_) {
         wq = wq_;
         nice = nice_;
@@ -459,6 +462,98 @@ namespace workque {
     }
   };
 
+  /// Keyに対するルーチンを登録できる
+  template<class KEY>
+  class coroutine_switch : public coroutine {
+   protected:
+    using coroutine::push;
+    using coroutine::push_for;
+    using coroutine::suspend;
+    using coroutine::resume;
+
+    coroutine_paramss routine_;
+    std::shared_ptr<event> ev_ = nullptr;
+    workque *exec_wq_ = nullptr;
+
+    /// Keyに対する実行関数
+    std::map<KEY, coroutine::coroutine_paramss> case_map_;
+
+   public:
+    /**
+     * @brief コンストラクタ
+     *
+     * デフォルトのniceを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @param[in] nice 登録するnice
+     */
+    coroutine_switch(workque *wq, nice_t nice = 0)
+     : coroutine(wq, nice)
+    {}
+
+    virtual coroutine_switch<KEY>& switch_function(std::function<KEY(void)> func) {
+      routine_.wq = wq_;
+      routine_.nice = nice_;
+      routine_.func = [this, func]() {
+        ++ counter_;
+        KEY result = func();
+        -- counter_;
+        auto it = case_map_.find(result);
+        if (it != case_map_.end()) {
+          // 次をスケジュール
+          it->second.start();
+        } else {
+          // ここで終了
+          end_();
+        }
+      };
+      return *this;
+    }
+    virtual coroutine_switch<KEY>& then(KEY key, std::function<result(void)> func) {
+      case_map_.insert(
+        std::make_pair(key,
+          coroutine_paramss(wq_, nice_, std::chrono::milliseconds(0), [this, func]() {
+            ++ counter_;
+            complete_(func());
+          })
+        )
+      );
+      return *this;
+    }
+    virtual coroutine_switch<KEY>& then(KEY key, coroutine *sub) {
+      case_map_.insert(
+        std::make_pair(key,
+          coroutine_paramss(wq_, nice_, std::chrono::milliseconds(0), [this, sub]() {
+            ++ counter_;
+            sub->start();
+            submit_();
+            // sub側が完了する際に, this->next_(1); が呼び出される
+          })
+        )
+      );
+      return *this;
+    }
+
+    /**
+     * @brief 処理ルーチンを実行する.
+     *
+     * 実行中のものがある場合は, 状態のみ変更する.
+     */
+    virtual void start() {
+      routine_.start();
+    }
+
+    /**
+     * @brief 処理ルーチンを停止する.
+     *
+     * 実行中の処理ルーチンを停止する.
+     */
+    virtual void stop() {
+      routine_.cancel();
+    }
+
+   protected:
+  };
 }
 }
 
