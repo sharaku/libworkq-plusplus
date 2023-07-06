@@ -43,6 +43,42 @@ main(void)
       return sharaku::workque::coroutine::result::next;
     });
 
+  sharaku::workque::coroutine co_in2(&scheduler, 0);
+  co_in2
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co_multi::co_in2::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("co_multi::co_in2::function2\n");
+      return sharaku::workque::coroutine::result::next;
+    });
+
+  sharaku::workque::coroutine co_in3(&scheduler, 0);
+  co_in3
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co_multi::co_in3::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("co_multi::co_in3::function2\n");
+      return sharaku::workque::coroutine::result::next;
+    });
+
+
+  sharaku::workque::coroutine_parallel co_multi(&scheduler, 0);
+  co_multi
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co_multi::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("co_multi::function2\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push(&co_in2)
+   .push(&co_in3);
+
   sharaku::workque::coroutine co(&scheduler, 0);
   co
    .push([]() -> sharaku::workque::coroutine::result {
@@ -50,12 +86,14 @@ main(void)
       return sharaku::workque::coroutine::result::next;
     })
    .push(&co_in1)
+   .push(&co_multi)
    .push([](){
       printf("co::function2\n");
       return sharaku::workque::coroutine::result::next;
     })
    .push([](){
       printf("co::function3\n");
+      exit(0);
       return sharaku::workque::coroutine::result::end;
     })
    .start();

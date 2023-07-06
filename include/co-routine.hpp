@@ -27,6 +27,7 @@
 #ifndef LIBSHARAKU_WORKQ_COROUTINE_HPP
 #define LIBSHARAKU_WORKQ_COROUTINE_HPP
 
+#include <atomic>
 #include <vector>
 #include <workq++.hpp>
 
@@ -50,194 +51,413 @@ namespace workque {
     };
 
    protected:
+    /// 状態
     status st = status::idle;
+    /// 実行位置
     uint64_t pc_ = 0;
+    /// スケジュール中のイベントスケジューラ
     std::shared_ptr<event> ev_;
-
+    /// デフォルトで使用するworkq
     workque *wq_ = nullptr;
+    /// デフォルトで使用する優先度
     nice_t nice_ = 0;
+    /// 実行中のカウント
+    std::atomic<uint64_t> counter_{0};
 
+    /// ルーチンの1パラメータ
     struct coroutine_paramss {
+      /// 使用するworkq
       workque *wq;
+      /// 優先度
       nice_t nice;
+      /// ディレイ秒数
       std::chrono::milliseconds ms;
+      /// スケジュールする関数
       std::function<void(void)> func;
+      /// スケジュール中のイベントスケジューラ
+      std::shared_ptr<event> ev;
+
+      /// コンストラクタ
       coroutine_paramss(workque *wq_, nice_t nice_, std::chrono::milliseconds ms_, std::function<void(void)> func_) {
         wq = wq_;
         nice = nice_;
         ms = ms_;
         func = func_;
       }
+
+      void start() {
+        ev = std::make_shared<event>(0);
+        ev->set_nice(nice);
+        ev->set_function(func);
+        if (ms != std::chrono::milliseconds(0)) {
+          wq->push_for(ms, ev);
+        } else {
+          wq->push(ev);
+        }
+      }
+
+      void cancel() {
+        wq->cancel(ev);
+      }
     };
+
+    /// 実行対象のルーチンリスト
     std::vector<coroutine_paramss> routine_;
 
-    // subに対するmaster.
-    // thisが完了、masterの次を実行する.
+    /// subに対するmaster.
+    /// thisが完了、masterの次を実行する.
     coroutine *master = nullptr;
    public:
 
+    /**
+     * @brief コンストラクタ
+     *
+     * デフォルトのniceを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @param[in] nice 登録するnice
+     */
     coroutine(workque *wq, nice_t nice = 0) {
       ev_ = std::make_shared<event>(0);
       wq_ = wq;
       nice_ = nice;
     }
 
+    /**
+     * @brief デフォルトのniceを登録する.
+     *
+     * デフォルトのniceを登録する.
+     *
+     * @param[in] nice 登録するnice
+     * @return 自身への参照
+     */
     coroutine& with_nice(nice_t nice) {
       nice_ = nice;
       return *this;
     }
 
+    /**
+     * @brief デフォルトのworkqを登録する.
+     *
+     * デフォルトのworkqを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @return 自身への参照
+     */
     coroutine& with_workque(workque *wq) {
       wq_ = wq;
       return *this;
     }
 
     /**
-     * 処理ルーチンを登録する
+     * @brief 処理ルーチンを登録する.
+     *
+     * 処理ルーチンを登録する.
+     *
+     * @param[in] func 登録する関数オブジェクト
+     * @return 自身への参照
      */
-    coroutine& push(std::function<result(void)> func) {
+    virtual coroutine& push(std::function<result(void)> func) {
       routine_.emplace_back(wq_, nice_, std::chrono::milliseconds(0),
         [this, func]() {
-          result ret = func();
-          if (ret == result::end) {
-            idle_();
-          } else if (ret == result::submit) {
-            submit_();
-          } else {
-            next_(static_cast<int>(ret));
-          }
+          ++ counter_;
+          complete_(func());
         }
       );
       return *this;
     }
 
     /**
-     * 指定秒数後に実行を行う処理ルーチンを登録する
+     * @brief 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * @param[in] ms ディレイミリ秒
+     * @param[in] func 登録する関数オブジェクト
+     * @return 自身への参照
      */
-    coroutine& push_for(std::chrono::milliseconds ms, std::function<result(void)> func) {
+    virtual coroutine& push_for(std::chrono::milliseconds ms, std::function<result(void)> func) {
       routine_.emplace_back(wq_, nice_, ms,
         [this, func]() {
-          result ret = func();
-          if (ret == result::end) {
-            idle_();
-            end_();
-          } else if (ret == result::submit) {
-            submit_();
-          } else {
-            next_(static_cast<int>(ret));
-          }
+          ++ counter_;
+          complete_(func());
         }
       );
       return *this;
     }
 
     /**
-     * 処理ルーチンを登録する
+     * @brief 処理ルーチンを登録する.
+     *
+     * 処理ルーチンを登録する.
+     *
+     * @param[in] sub 登録するコルーチン
+     * @return 自身への参照
      */
-    coroutine& push(coroutine *sub) {
+    virtual coroutine& push(coroutine *sub) {
       // sub側にthisを登録する
       sub->master = this;
       routine_.emplace_back(wq_, nice_, std::chrono::milliseconds(0),
         [this, sub]() {
+          ++ counter_;
           sub->start();
-          return result::submit;
+          submit_();
+          // sub側が完了する際に, this->next_(1); が呼び出される
         }
       );
       return *this;
     }
 
     /**
-     * 指定秒数後に実行を行う処理ルーチンを登録する
+     * @brief 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * @param[in] ms ディレイミリ秒
+     * @param[in] sub 登録するコルーチン
+     * @return 自身への参照
      */
-    coroutine& push_for(std::chrono::milliseconds ms, coroutine *sub) {
+    virtual coroutine& push_for(std::chrono::milliseconds ms, coroutine *sub) {
       // sub側にthisを登録する
       sub->master = this;
       routine_.emplace_back(wq_, nice_, ms,
         [this, sub]() {
+          ++ counter_;
           sub->start();
-          return result::submit;
+          submit_();
+          // sub側が完了する際に, this->next_(1); が呼び出される
         }
       );
       return *this;
     }
 
     /**
-     * 処理ルーチンを実行する
+     * @brief 処理ルーチンを実行する.
+     *
+     * 実行中のものがある場合は, 状態のみ変更する.
      */
-    void start() {
+    virtual void start() {
       st = status::active;
-      if (routine_.size() > pc_) {
-        ev_->set_nice(routine_[pc_].nice);
-        ev_->set_function(routine_[pc_].func);
-        if (routine_[pc_].ms != std::chrono::milliseconds(0)) {
-          routine_[pc_].wq->push_for(routine_[pc_].ms, ev_);
-        } else {
-          routine_[pc_].wq->push(ev_);
+      if (counter_.load() == 0) {
+        if (routine_.size() > pc_) {
+          routine_[pc_].start();
         }
       }
     }
 
-    void stop() {
-      routine_[pc_].wq->cancel(ev_);
-      st = status::idle;
-      pc_ = 0;
+    /**
+     * @brief 処理ルーチンを停止する.
+     *
+     * 実行中の処理ルーチンを停止する.
+     */
+    virtual void stop() {
+      routine_[pc_].cancel();
+      end_();
     }
 
-    void suspend() {
-      routine_[pc_].wq->cancel(ev_);
+    /**
+     * @brief 状態をsuspendにする.
+     *
+     * 状態を変更することで, complete_が呼ばれたときにそこで一時停止する.
+     */
+    virtual void suspend() {
       st = status::suspend;
     }
 
-    void resume() {
+    /**
+     * @brief suspendの状態をactiveにする.
+     *
+     * コルーチンを再開します.
+     */
+    virtual void resume() {
       if (st == status::suspend) {
-        ev_->set_nice(routine_[pc_].nice);
-        ev_->set_function(routine_[pc_].func);
-        if (routine_[pc_].ms != std::chrono::milliseconds(0)) {
-          routine_[pc_].wq->push_for(routine_[pc_].ms, ev_);
-        } else {
-          routine_[pc_].wq->push(ev_);
-        }
+        routine_[pc_].start();
       }
     }
 
    protected:
 
-    void idle_() {
-      st = status::idle;
-      pc_ = 0;
+    /**
+     * @brief コルーチン外に処理を移管するための処理.
+     *
+     * コルーチン外に処理を移管する場合に使用します.
+     */
+    virtual void submit_() {
     }
 
-    void submit_() {
-      st = status::suspend;
-    }
-
-    void next_(int add_pc) {
-        if (routine_.size() > (pc_ + add_pc)) {
-          pc_ += add_pc;
-        } else {
-          end_();
-          st = status::idle;
-          pc_ = 0;
-        }
-
-      if (st == status::active) {
-        ev_->set_nice(routine_[pc_].nice);
-        ev_->set_function(routine_[pc_].func);
-        if (routine_[pc_].ms != std::chrono::milliseconds(0)) {
-          routine_[pc_].wq->push_for(routine_[pc_].ms, ev_);
-        } else {
-          routine_[pc_].wq->push(ev_);
-        }
+    /**
+     * @brief ルーチン成功時に呼び出す.
+     *
+     * ルーチン成功時に呼び出す.
+     *
+     * @param[in] ret ルーチンの終了コード
+     */
+    virtual void complete_(result ret) {
+      -- counter_;
+      if (ret == result::end) {
+        end_();
+      } else if (ret == result::submit) {
+        submit_();
+      } else {
+        // retry or next
+        next_(static_cast<int>(ret));
       }
     }
 
-    void end_() {
+    /**
+     * @brief コルーチンの次を実行する.
+     *
+     * コルーチンの次の実行を行います. 次が登録されていない場合は終了する.
+     *
+     * @param[in] add_pc PCに対して加算する値
+     */
+    virtual void next_(int add_pc) {
+      if (routine_.size() > (pc_ + add_pc)) {
+        pc_ += add_pc;
+
+        // suspendの場合は次に行かない
+        if (st == status::active) {
+          routine_[pc_].start();
+        }
+      } else {
+        end_();
+      }
+    }
+
+    /**
+     * @brief コルーチン終了時に呼び出す.
+     *
+     * コルーチン終了時に呼び出す. これにより, 呼び出し元の次のルーチンを実行する.
+     */
+    virtual void end_() {
+      st = status::idle;
+      pc_ = 0;
       if (master) {
-        master->next_(1);
+        master->complete_(result::next);
       }
     }
   };
 
+  /// 並列で実行する
+  class coroutine_parallel : public coroutine {
+   protected:
+    /// スケジュール中のカウント
+    std::atomic<uint64_t> sched_counter_{0};
+
+    using coroutine::suspend;
+    using coroutine::resume;
+
+   public:
+    /**
+     * @brief コンストラクタ
+     *
+     * デフォルトのniceを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @param[in] nice 登録するnice
+     */
+    coroutine_parallel(workque *wq, nice_t nice = 0)
+     : coroutine(wq, nice)
+    {}
+
+    /**
+     * @brief 処理ルーチンを登録する.
+     *
+     * 処理ルーチンを登録する.
+     *
+     * @param[in] func 登録する関数オブジェクト
+     * @return 自身への参照
+     */
+    virtual coroutine& push(std::function<result(void)> func) {
+      ++ sched_counter_;
+      return coroutine::push(func);
+    }
+
+    /**
+     * @brief 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * @param[in] ms ディレイミリ秒
+     * @param[in] func 登録する関数オブジェクト
+     * @return 自身への参照
+     */
+    virtual coroutine& push_for(std::chrono::milliseconds ms, std::function<result(void)> func) {
+      ++ sched_counter_;
+      return coroutine::push_for(ms, func);
+    }
+
+    /**
+     * @brief 処理ルーチンを登録する.
+     *
+     * 処理ルーチンを登録する.
+     *
+     * @param[in] sub 登録するコルーチン
+     * @return 自身への参照
+     */
+    virtual coroutine& push(coroutine *sub) {
+      ++ sched_counter_;
+      return coroutine::push(sub);
+    }
+
+    /**
+     * @brief 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * 指定秒数後に実行を行う処理ルーチンを登録する.
+     *
+     * @param[in] ms ディレイミリ秒
+     * @param[in] sub 登録するコルーチン
+     * @return 自身への参照
+     */
+    virtual coroutine& push_for(std::chrono::milliseconds ms, coroutine *sub) {
+      ++ sched_counter_;
+      return coroutine::push_for(ms, sub);
+    }
+
+    /**
+     * @brief 処理ルーチンを実行する.
+     *
+     * 実行中のものがある場合は, 状態のみ変更する.
+     */
+    virtual void start() {
+      // 登録しているものをすべて実行
+      st = status::active;
+      if (counter_.load() == 0) {
+        for (auto &routine : routine_) {
+          routine.start();
+        }
+      }
+    }
+
+    /**
+     * @brief 処理ルーチンを停止する.
+     *
+     * 実行中の処理ルーチンを停止する.
+     */
+    virtual void stop() {
+      // 登録しているものをすべてキャンセル実行
+      for (auto &routine : routine_) {
+        routine.cancel();
+      }
+      end_();
+    }
+
+   protected:
+    /**
+     * @brief ルーチン成功時に呼び出す.
+     *
+     * ルーチン成功時に呼び出す.
+     *
+     * @param[in] ret ルーチンの終了コード
+     */
+    virtual void complete_(result ret) {
+      -- counter_;
+      -- sched_counter_;
+      if (sched_counter_.load() == 0) {
+        end_();
+      }
+    }
+  };
 
 }
 }
