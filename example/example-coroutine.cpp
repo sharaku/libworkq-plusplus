@@ -108,6 +108,22 @@ main(void)
       return sharaku::workque::coroutine::result::next;
     });
 
+
+  // ------------------------------------
+  // ループを作成
+  // ------------------------------------
+  sharaku::workque::coroutine_loop co_loop(&scheduler, 0);
+  co_loop
+   .with_counter(3)
+   .push([]() -> sharaku::workque::coroutine::result {
+      printf("co_loop::function1\n");
+      return sharaku::workque::coroutine::result::next;
+    })
+   .push([](){
+      printf("co_loop::function2\n");
+      return sharaku::workque::coroutine::result::next;
+    });
+
   // ------------------------------------
   // 大本の制御
   // ------------------------------------
@@ -120,6 +136,7 @@ main(void)
    .push(&co_in1)
    .push(&co_multi)
    .push(&co_switch)
+   .push(&co_loop)
    .push([](){
       printf("co::function2\n");
       return sharaku::workque::coroutine::result::next;

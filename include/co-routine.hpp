@@ -554,6 +554,84 @@ namespace workque {
 
    protected:
   };
+
+  /// loopするルーチンを登録できる
+  class coroutine_loop : public coroutine {
+   protected:
+    int64_t loop_cnt_max_ = -1;
+    int64_t loop_cnt_ = -1;
+
+   public:
+    /**
+     * @brief コンストラクタ
+     *
+     * デフォルトのniceを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @param[in] nice 登録するnice
+     */
+    coroutine_loop(workque *wq, nice_t nice = 0)
+     : coroutine(wq, nice)
+    {}
+
+
+    /**
+     * @brief デフォルトのworkqを登録する.
+     *
+     * デフォルトのworkqを登録する.
+     *
+     * @param[in] wq 登録するworkq
+     * @return 自身への参照
+     */
+    coroutine& with_counter(int64_t cnt) {
+      loop_cnt_max_ = cnt;
+      return *this;
+    }
+
+    /**
+     * @brief 処理ルーチンを実行する.
+     *
+     * 実行中のものがある場合は, 状態のみ変更する.
+     */
+    virtual void start() {
+      loop_cnt_ = loop_cnt_max_;
+      coroutine::start();
+    }
+   protected:
+
+    /**
+     * @brief コルーチンの次を実行する.
+     *
+     * コルーチンの次の実行を行います. 次が登録されていない場合は終了する.
+     *
+     * @param[in] add_pc PCに対して加算する値
+     */
+    virtual void next_(int add_pc) {
+      if (routine_.size() > (pc_ + add_pc)) {
+        pc_ += add_pc;
+
+        // suspendの場合は次に行かない
+        if (st == status::active) {
+          routine_[pc_].start();
+        }
+      } else {
+        // マイナスの場合は0にならないので無限ループ
+        if (loop_cnt_ > 0) {
+          -- loop_cnt_;
+        }
+        if (loop_cnt_) {
+          pc_ = 0;
+          // suspendの場合は次に行かない
+          if (st == status::active) {
+            routine_[pc_].start();
+          }
+        } else {
+          end_();
+        }
+      }
+    }
+  };
+
 }
 }
 
